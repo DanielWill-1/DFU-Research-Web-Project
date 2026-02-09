@@ -1,21 +1,25 @@
-#main application file for diabetic foot ulcer analysis web app
-import base64
-import io
+"""
+DFU Classifier Web App - Flask Backend
+Uses threading for background processing (no RQ/Redis/Celery)
+"""
 import os
+import threading
+from datetime import datetime
 from dotenv import load_dotenv
-import cv2
-import numpy as np
-import tensorflow as tf
-import torch
-import segmentation_models_pytorch as smp
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
-from flask import Flask, render_template, request
-from PIL import Image
-from tensorflow.keras.applications import efficientnet
-from lime import lime_image
-from skimage.segmentation import mark_boundaries
-from groq import Groq
+from flask import Flask, render_template, request, jsonify, session
+from job_manager import job_manager
+from ml_pipeline import (
+    initialize_models,
+    load_and_preprocess_image,
+    classify_image,
+    generate_gradcam,
+    generate_lime,
+    segment_wound,
+    estimate_depth,
+    generate_llm_report,
+    image_to_base64,
+    cfg
+)
 
 # Load environment variables
 load_dotenv()
@@ -24,319 +28,207 @@ load_dotenv()
 # CONFIGURATION
 # ==========================================
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'your-secret-key-change-this'
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max
+app.config['UPLOAD_FOLDER'] = 'uploads'
 
-# --- API KEYS ---
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-
-# --- PATHS (Updated) ---
-TF_MODEL_PATH = "final_model.h5"
-TORCH_SEG_PATH = "new_unet_seg.pth"
-
-# --- SETTINGS ---
-CLASS_NAMES = ['Both', 'Infection', 'Ischaemia', 'None']
-IMG_SIZE = (300, 300)      # Classification Input
-SEG_SIZE = (224, 224)      # Segmentation Input
-PIXELS_PER_CM = 38.0       # Calibration
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# Ensure upload folder exists
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # ==========================================
-# 1. LOAD MODELS
+# INITIALIZE MODELS AT STARTUP
 # ==========================================
-print(f"⚙️ System Device: {DEVICE}")
-
-# A. TensorFlow Classifier
-print("⏳ Loading Classifier...")
-tf_model = None
-try:
-    tf_model = tf.keras.models.load_model(TF_MODEL_PATH, compile=False)
-    print("✅ Classifier Loaded.")
-except Exception as e:
-    print(f"❌ Classifier Error: {e}")
-
-# B. PyTorch Segmentation
-print("⏳ Loading Segmentation...")
-seg_model = None
-try:
-    seg_model = smp.Unet(
-        encoder_name="efficientnet-b0", encoder_weights=None, in_channels=3, classes=1, activation=None
-    ).to(DEVICE)
-    
-    if os.path.isfile(TORCH_SEG_PATH):
-        # weights_only=False helps with some older/custom pth files
-        seg_model.load_state_dict(torch.load(TORCH_SEG_PATH, map_location=DEVICE))
-        seg_model.eval()
-        print("✅ Segmentation Loaded.")
-    else:
-        print(f"⚠️ Segmentation weights not found at {TORCH_SEG_PATH}")
-except Exception as e:
-    print(f"❌ Segmentation Error: {e}")
-
-# C. MiDaS Depth Estimation
-print("⏳ Loading MiDaS Depth Model...")
-midas_model = None
-midas_transform = None
-try:
-    model_type = "MiDaS_small" 
-    midas_model = torch.hub.load("intel-isl/MiDaS", model_type).to(DEVICE)
-    midas_model.eval()
-    midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
-    midas_transform = midas_transforms.small_transform
-    print(f"✅ MiDaS ({model_type}) Loaded.")
-except Exception as e:
-    print(f"❌ MiDaS Error: {e}")
-
-# D. Explainers (GradCAM & LIME)
-grad_model = None
-if tf_model:
-    # Setup GradCAM Model
-    target_layer = None
-    # Auto-find last conv layer
-    for layer in tf_model.layers:
-        if 'efficientnet' in layer.name.lower():
-            for sub in reversed(layer.layers):
-                if isinstance(sub, tf.keras.layers.Conv2D):
-                    target_layer = sub.name
-                    grad_model = tf.keras.models.Model([layer.input], [layer.get_layer(sub.name).output, layer.output])
-                    break
-    if not grad_model: # Fallback
-         for layer in reversed(tf_model.layers):
-            if isinstance(layer, tf.keras.layers.Conv2D):
-                grad_model = tf.keras.models.Model([tf_model.inputs], [tf_model.get_layer(layer.name).output, tf_model.output])
-                break
-
-# Initialize LIME
-lime_explainer = lime_image.LimeImageExplainer()
+initialize_models()
 
 # ==========================================
-# 2. HELPER FUNCTIONS
+# CACHE FOR COMPLETED RESULTS (in-memory)
 # ==========================================
-def array_to_base64(img_array):
-    """Convert numpy array to base64 string for HTML display"""
-    if img_array.dtype != np.uint8:
-        img_array = (img_array * 255).astype(np.uint8)
-    img_pil = Image.fromarray(img_array)
-    buff = io.BytesIO()
-    img_pil.save(buff, format="PNG")
-    return base64.b64encode(buff.getvalue()).decode('utf-8')
+results_cache = {}  # {job_id: results}
 
-def get_depth_map(img_rgb):
-    """Returns depth map (numpy) and relative depth score (float)"""
-    if midas_model is None: 
-        return np.zeros(img_rgb.shape[:2]), 0.0
-    
-    input_batch = midas_transform(img_rgb).to(DEVICE)
-    with torch.no_grad():
-        prediction = midas_model(input_batch)
-        prediction = torch.nn.functional.interpolate(
-            prediction.unsqueeze(1),
-            size=img_rgb.shape[:2],
-            mode="bicubic",
-            align_corners=False,
-        ).squeeze()
-    
-    depth_map = prediction.cpu().numpy()
-    
-    # Normalize 0-1 for display
-    depth_min = depth_map.min()
-    depth_max = depth_map.max()
-    depth_norm = (depth_map - depth_min) / (depth_max - depth_min + 1e-8)
-    
-    # Calculate Relative Depth Score (Mean of normalized depth)
-    depth_score = np.mean(depth_norm)
-    
-    return depth_norm, round(float(depth_score), 2)
-
-def predict_lime_fn(images):
-    """Helper for LIME to predict on batch"""
-    # LIME passes images as a numpy array, we need to preprocess for EfficientNet
-    batch = efficientnet.preprocess_input(np.array(images))
-    return tf_model.predict(batch, verbose=0)
-
-def generate_llm_report(symptoms, ai_results):
-    """Calls Groq API to generate report"""
-    if not GROQ_API_KEY:
-        return "LLM Analysis Unavailable: GROQ_API_KEY not set in environment."
-
+# ==========================================
+# BACKGROUND PROCESSING FUNCTION
+# ==========================================
+def process_image_task(job_id, file_path, symptoms_dict):
+    """
+    Complete ML pipeline in background thread.
+    Stores results in cache for display after reload.
+    """
     try:
-        client = Groq(api_key=GROQ_API_KEY)
+        job_manager.mark_running(job_id)
         
-        # Format Data
-        symptom_text = "\n".join([f"- {k}: {v}" for k, v in symptoms.items()])
-        ai_text = "\n".join([f"- {k}: {v}" for k, v in ai_results.items()])
+        # ===== STAGE 1: LOAD & PREPROCESS =====
+        job_manager.update_progress(job_id, 10, "Loading and preprocessing image...")
+        img_array, img_np, img_pil = load_and_preprocess_image(file_path)
+        img_base64 = image_to_base64(img_pil)
         
-        prompt = f"""
-        You are an expert medical assistant specializing in Diabetic Foot Ulcers.
-        Analyze this patient case based on their reported symptoms and AI Computer Vision findings.
+        # ===== STAGE 2: CLASSIFICATION =====
+        job_manager.update_progress(job_id, 25, "Running classification...")
+        prediction, confidence, prob_dict = classify_image(img_array)
+        pred_idx = cfg.CLASS_NAMES.index(prediction)
         
-        PATIENT SYMPTOMS:
-        {symptom_text}
+        # ===== STAGE 3: GRADCAM =====
+        job_manager.update_progress(job_id, 40, "Generating GradCAM heatmap...")
+        gradcam_data = generate_gradcam(img_array, img_np, pred_idx)
         
-        AI IMAGE ANALYSIS:
-        {ai_text}
+        # ===== STAGE 4: LIME =====
+        job_manager.update_progress(job_id, 50, "Generating LIME explanation...")
+        lime_data = generate_lime(img_pil, pred_idx)
         
-        OUTPUT FORMAT:
-        1. **Summary**: Synthesis of visual and symptom data.
-        2. **Risk Assessment**: High/Medium/Low urgency based on signs like "Infection", "Redness", "Necrotic" tissue.
-        3. **Recommendations**: 3-4 actionable steps for the patient.
-        4. **Disclaimer**: State that you are an AI and this is not a diagnosis.
+        # ===== STAGE 5: SEGMENTATION =====
+        job_manager.update_progress(job_id, 70, "Segmenting wound region...")
+        seg_data, metrics = segment_wound(img_np)
         
-        Keep it concise (max 200 words) and empathetic.
-        """
+        # ===== STAGE 6: DEPTH ESTIMATION =====
+        job_manager.update_progress(job_id, 85, "Computing depth map...")
+        depth_data, depth_score = estimate_depth(img_np)
+        if depth_score > 0:
+            metrics['Relative Depth Index'] = f"{depth_score}"
         
-        completion = client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model="llama-3.1-8b-instant",
-        )
-        return completion.choices[0].message.content
+        # ===== STAGE 7: LLM REPORT =====
+        job_manager.update_progress(job_id, 95, "Generating medical report...")
+        ai_results = {
+            "Classification": prediction,
+            "Confidence": f"{confidence}%",
+            "Wound Area": metrics.get('Wound Area', 'N/A'),
+            "Max Width": metrics.get('Max Width', 'N/A'),
+            "Relative Depth Index": metrics.get('Relative Depth Index', 'N/A')
+        }
+        llm_report = generate_llm_report(symptoms_dict, ai_results)
+        
+        # ===== COLLECT ALL RESULTS =====
+        results = {
+            'prediction': prediction,
+            'confidence': f"{confidence}",
+            'metrics': prob_dict,
+            'gradcam_data': gradcam_data,
+            'lime_data': lime_data,
+            'seg_data': seg_data,
+            'depth_data': depth_data,
+            'llm_report': llm_report,
+            'img_data': img_base64,
+            'report_date': datetime.now().strftime("%d %B, %Y at %H:%M"),
+            'ai_results': ai_results
+        }
+        
+        # Store results in cache for retrieval after reload
+        results_cache[job_id] = results
+        
+        job_manager.mark_completed(job_id, results)
+        print(f"✅ Job {job_id} completed successfully")
+        
     except Exception as e:
-        return f"LLM Error: {str(e)}"
+        job_manager.mark_failed(job_id, str(e))
+        print(f"❌ Job {job_id} failed: {e}")
+        import traceback
+        traceback.print_exc()
 
 # ==========================================
-# 3. ROUTES
+# FLASK ROUTES
 # ==========================================
+
 @app.route('/', methods=['GET', 'POST'])
 def index():
+    """
+    Main upload endpoint & results display.
+    - POST: Creates job and launches background thread
+    - GET: Displays form or retrieves cached results
+    """
     context = {}
     
+    # Check if we're loading results from a completed job
+    job_id = request.args.get('job_id')
+    if job_id and job_id in results_cache:
+        # Display cached results
+        context['results'] = results_cache[job_id]
+        print(f"📊 Displaying results for job {job_id}")
+        # Optional: Delete from cache after displaying (uncomment if you want)
+        # del results_cache[job_id]
+    
     if request.method == 'POST':
-        print("📝 POST request received")
-        
-        # 1. Collect User Symptoms
-        symptoms = {
-            "Redness": request.form.get('redness', 'No'),
-            "Swelling": request.form.get('swelling', 'No'),
-            "Odor": request.form.get('odor', 'No'),
-            "Pain": request.form.get('pain', 'No'),
-            "Discharge": request.form.get('discharge', 'No'),
-            "Fever": request.form.get('fever', 'No')
-        }
-        print(f"✓ Symptoms collected: {symptoms}")
-        
         file = request.files.get('file')
-        print(f"✓ File received: {file.filename if file else 'None'}")
         
         if not file or file.filename == '':
             context['error'] = "Please upload an image."
-            print("❌ No file uploaded")
-            return render_template('indexb.html', **context)
+            return render_template('index.html', **context), 400
         
-        if not tf_model:
-            context['error'] = "Classifier model not loaded. Check TF_MODEL_PATH."
-            print("❌ TensorFlow model not loaded")
-            return render_template('indexb.html', **context)
-    
         try:
-            print("🔄 Processing image...")
-            # --- PREPROCESSING ---
-            img_pil = Image.open(file.stream).convert('RGB')
-            img_np = np.array(img_pil)
-            print(f"✓ Image loaded: shape {img_np.shape}")
-            
-            # TF Input (Resize to 300x300)
-            img_tf = img_pil.resize(IMG_SIZE)
-            img_tf_arr = tf.keras.preprocessing.image.img_to_array(img_tf)
-            img_tf_batch = np.expand_dims(img_tf_arr, axis=0)
-            img_pre = efficientnet.preprocess_input(img_tf_batch.copy())
-
-            # --- A. CLASSIFICATION ---
-            preds = tf_model.predict(img_pre, verbose=0)
-            pred_idx = np.argmax(preds[0])
-            pred_label = CLASS_NAMES[pred_idx]
-            confidence = round(float(preds[0][pred_idx]) * 100, 2)
-            
-            context['prediction'] = pred_label
-            context['confidence'] = confidence
-            context['img_data'] = array_to_base64(img_np)
-            print(f"✓ Classification: {pred_label} ({confidence}%)")
-            
-            # --- B. GRAD-CAM ---
-            if grad_model:
-                print("🔄 Generating GradCAM...")
-                with tf.GradientTape() as tape:
-                    conv_out, pred_out = grad_model(img_pre)
-                    loss = pred_out[:, pred_idx]
-                grads = tape.gradient(loss, conv_out)
-                pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-                heatmap = tf.squeeze(conv_out[0] @ pooled_grads[..., tf.newaxis])
-                heatmap = tf.maximum(heatmap, 0) / (tf.math.reduce_max(heatmap) + 1e-10)
-                heatmap = heatmap.numpy()
-                
-                heatmap_resized = cv2.resize(heatmap, (img_np.shape[1], img_np.shape[0]))
-                heatmap_colored = cv2.applyColorMap(np.uint8(255*heatmap_resized), cv2.COLORMAP_JET)
-                overlay = cv2.addWeighted(img_np, 0.6, cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB), 0.4, 0)
-                context['gradcam_data'] = array_to_base64(overlay)
-                print("✓ GradCAM generated")
-
-            # --- C. SEGMENTATION & METRICS ---
-            area_cm2 = 0
-            width_cm = 0
-            if seg_model:
-                print("🔄 Performing segmentation...")
-                seg_t = A.Compose([A.Resize(SEG_SIZE[0], SEG_SIZE[1]), A.Normalize(), ToTensorV2()])
-                input_t = seg_t(image=img_np)['image'].unsqueeze(0).to(DEVICE)
-                with torch.no_grad():
-                    mask = (torch.sigmoid(seg_model(input_t)) > 0.5).float().squeeze().cpu().numpy()
-                
-                mask_uint8 = cv2.resize((mask*255).astype(np.uint8), (img_np.shape[1], img_np.shape[0]), interpolation=cv2.INTER_NEAREST)
-                context['seg_data'] = array_to_base64(mask_uint8)
-                
-                # Calculate Metrics
-                area_pixels = np.count_nonzero(mask_uint8)
-                area_cm2 = round(area_pixels / (PIXELS_PER_CM**2), 2)
-                x, y, w, h = cv2.boundingRect(mask_uint8)
-                width_cm = round(w / PIXELS_PER_CM, 2)
-                print(f"✓ Segmentation: Area={area_cm2} cm², Width={width_cm} cm")
-
-            # --- D. DEPTH ESTIMATION (MiDaS) ---
-            print("🔄 Estimating depth...")
-            depth_map, depth_score = get_depth_map(img_np)
-            depth_colored = cv2.applyColorMap(np.uint8(255 * depth_map), cv2.COLORMAP_INFERNO)
-            depth_colored = cv2.cvtColor(depth_colored, cv2.COLOR_BGR2RGB)
-            context['depth_data'] = array_to_base64(depth_colored)
-            print(f"✓ Depth score: {depth_score}")
-
-            # --- E. LIME EXPLANATION ---
-            print("🔄 Generating LIME explanation...")
-            try:
-                lime_exp = lime_explainer.explain_instance(
-                    np.array(img_tf), 
-                    predict_lime_fn,
-                    top_labels=1, 
-                    hide_color=0, 
-                    num_samples=100 
-                )
-                temp_lime, mask_lime = lime_exp.get_image_and_mask(
-                    lime_exp.top_labels[0], positive_only=True, num_features=5, hide_rest=False
-                )
-                lime_boundary = mark_boundaries(temp_lime/255.0, mask_lime, color=(1, 1, 0))
-                lime_uint8 = (lime_boundary * 255).astype(np.uint8)
-                context['lime_data'] = array_to_base64(lime_uint8)
-                print("✓ LIME explanation generated")
-            except Exception as e:
-                print(f"⚠️ LIME failed (non-critical): {e}")
-                context['lime_data'] = None
-            
-            # --- F. LLM REPORT ---
-            print("🔄 Generating LLM report...")
-            ai_results = {
-                "Classification": pred_label,
-                "Confidence": f"{confidence}%",
-                "Wound Area": f"{area_cm2} cm2",
-                "Max Width": f"{width_cm} cm",
-                "Relative Depth Index": depth_score
+            # Collect symptoms
+            symptoms = {
+                'redness': 'redness' in request.form,
+                'swelling': 'swelling' in request.form,
+                'odor': 'odor' in request.form,
+                'pain': 'pain' in request.form,
+                'discharge': 'discharge' in request.form,
+                'fever': 'fever' in request.form
             }
             
-            context['metrics'] = ai_results 
-            context['llm_report'] = generate_llm_report(symptoms, ai_results)
-            print("✅ Analysis complete!")
-
+            # Save uploaded file
+            filename = file.filename
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(file_path)
+            
+            # Create job
+            job_id = job_manager.create_job()
+            
+            # Launch background thread
+            thread = threading.Thread(
+                target=process_image_task,
+                args=(job_id, file_path, symptoms),
+                daemon=True
+            )
+            thread.start()
+            
+            context['task_id'] = job_id
+            print(f"✅ Job created: {job_id}")
+            
         except Exception as e:
-            context['error'] = f"Analysis Failed: {str(e)}"
+            context['error'] = f"Error: {str(e)}"
             print(f"❌ Error: {e}")
-            import traceback
-            traceback.print_exc()
+    
+    return render_template('index.html', **context)
 
-    return render_template('indexb.html', **context)
+@app.route('/job-status/<job_id>', methods=['GET'])
+def get_job_status(job_id):
+    """
+    Poll endpoint for job status.
+    Returns JSON with state, progress, and completion redirect URL.
+    """
+    job = job_manager.get_job(job_id)
+    
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    response = {
+        'state': job['state'],
+        'progress': job['progress'],
+        'status': job['status_message'],
+        'current': job['progress']
+    }
+    
+    # If completed, include redirect URL
+    if job['state'] == 'completed':
+        response['redirect_url'] = f'/?job_id={job_id}'
+    
+    if job['state'] == 'failed':
+        response['error'] = job['error']
+    
+    return jsonify(response)
+
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({'error': 'Endpoint not found'}), 404
+
+@app.errorhandler(500)
+def server_error(e):
+    return jsonify({'error': 'Internal server error'}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    print("\n" + "=" * 60)
+    print("🚀 DFU Classifier Web App Starting")
+    print("=" * 60)
+    print("✅ Threading-based processing (no RQ/Redis/Celery)")
+    print("📁 Upload folder:", os.path.abspath(app.config['UPLOAD_FOLDER']))
+    print("🌐 Server: http://localhost:5000")
+    print("=" * 60 + "\n")
+    
+    app.run(debug=False, threaded=True, port=5000)

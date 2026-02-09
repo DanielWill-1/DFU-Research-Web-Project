@@ -3,164 +3,364 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DFU Intelligent Analysis</title>
+    <title>DFU AI Diagnostic</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
-        body { background-color: #f4f7f6; font-family: 'Segoe UI', system-ui, sans-serif; }
-        .hero-section { background: linear-gradient(135deg, #0d6efd, #0a58ca); color: white; padding: 40px 0; margin-bottom: 30px; }
-        .card { border: none; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); margin-bottom: 25px; }
-        .img-preview { width: 100%; height: 220px; object-fit: contain; background: #000; border-radius: 8px; }
-        .metric-box { background: #f8f9fa; border-radius: 8px; padding: 15px; text-align: center; border: 1px solid #e9ecef; }
-        .metric-val { font-size: 1.4rem; font-weight: 700; color: #0d6efd; }
-        .metric-lbl { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; color: #6c757d; }
-        .report-box { background-color: #ffffeb; border-left: 5px solid #ffc107; padding: 20px; }
-        .xai-label { font-size: 0.85rem; font-weight: 600; margin-top: 8px; color: #495057; }
+        body { background-color: #f8f9fa; }
+        .result-card { border: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .img-preview { max-height: 300px; object-fit: contain; border-radius: 8px; }
+        .progress { height: 25px; font-size: 0.9rem; }
+        .explanation-img { max-height: 250px; object-fit: contain; border-radius: 8px; margin-top: 10px; }
+        .loading-spinner { display: none; text-align: center; }
+        .spinner-border { animation: spin 1s linear infinite; }
+        .progress-container { display: none; margin-top: 20px; }
+        .progress-bar { animation: progress-animate 0.3s ease; }
     </style>
 </head>
 <body>
 
-<div class="hero-section text-center">
-    <div class="container">
-        <h1 class="fw-bold">🩺 DFU Intelligent Analysis</h1>
-        <p class="lead mb-0">Computer Vision + Segmentation + LIME + GenAI</p>
+<div class="container py-5">
+    <div class="text-center mb-5">
+        <h1 class="display-5 fw-bold text-primary">🩺 DFU Classifier AI</h1>
+        <p class="lead text-muted">EfficientNetB3 + Transformer Model</p>
     </div>
-</div>
 
-<div class="container pb-5">
-    <div class="row">
-        <div class="col-lg-4">
-            <div class="card">
-                <div class="card-header bg-white fw-bold py-3">1. Patient Input</div>
-                <div class="card-body">
-                    <form method="POST" enctype="multipart/form-data">
-                        
+    <!-- Hidden element to store task_id from Flask context -->
+    <div id="taskIdHolder" data-task-id="{{ task_id or '' }}" style="display:none;"></div>
+
+    <div class="row justify-content-center">
+        <div class="col-md-10">
+            
+            {% if not results %}
+            <!-- UPLOAD FORM (shown when no results) -->
+            <div class="card result-card mb-4">
+                <div class="card-body p-5">
+                    <form id="analysisForm" method="POST" enctype="multipart/form-data">
+                        <h5 class="mb-3">1. Upload Foot Image</h5>
                         <div class="mb-4">
-                            <label class="form-label fw-bold">Upload Wound Image</label>
-                            <input class="form-control" type="file" name="file" accept="image/*" required>
+                            <label for="fileUpload" class="form-label">Select Image</label>
+                            <input class="form-control form-control-lg" type="file" id="fileUpload" name="file" accept="image/*" required>
                         </div>
 
-                        <div class="mb-4">
-                            <label class="form-label fw-bold mb-2">Symptoms (Check all that apply)</label>
-                            <div class="row g-2">
-                                <div class="col-6"><div class="form-check"><input class="form-check-input" type="checkbox" name="redness" value="Yes" id="s1"><label class="form-check-label" for="s1">Redness</label></div></div>
-                                <div class="col-6"><div class="form-check"><input class="form-check-input" type="checkbox" name="swelling" value="Yes" id="s2"><label class="form-check-label" for="s2">Swelling</label></div></div>
-                                <div class="col-6"><div class="form-check"><input class="form-check-input" type="checkbox" name="odor" value="Yes" id="s3"><label class="form-check-label" for="s3">Foul Odor</label></div></div>
-                                <div class="col-6"><div class="form-check"><input class="form-check-input" type="checkbox" name="pain" value="Yes" id="s4"><label class="form-check-label" for="s4">High Pain</label></div></div>
-                                <div class="col-6"><div class="form-check"><input class="form-check-input" type="checkbox" name="discharge" value="Yes" id="s5"><label class="form-check-label" for="s5">Pus/Fluid</label></div></div>
-                                <div class="col-6"><div class="form-check"><input class="form-check-input" type="checkbox" name="fever" value="Yes" id="s6"><label class="form-check-label" for="s6">Fever</label></div></div>
+                        <h5 class="mb-3">2. Report Symptoms (if any)</h5>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="redness" name="redness" value="Yes">
+                                    <label class="form-check-label" for="redness">Redness</label>
+                                </div>
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="swelling" name="swelling" value="Yes">
+                                    <label class="form-check-label" for="swelling">Swelling</label>
+                                </div>
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="odor" name="odor" value="Yes">
+                                    <label class="form-check-label" for="odor">Odor</label>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="pain" name="pain" value="Yes">
+                                    <label class="form-check-label" for="pain">Pain</label>
+                                </div>
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="discharge" name="discharge" value="Yes">
+                                    <label class="form-check-label" for="discharge">Discharge</label>
+                                </div>
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="fever" name="fever" value="Yes">
+                                    <label class="form-check-label" for="fever">Fever</label>
+                                </div>
                             </div>
                         </div>
 
-                        <button type="submit" class="btn btn-primary w-100 py-2 fw-bold">Run Full Analysis</button>
+                        <button type="submit" class="btn btn-primary btn-lg px-5 mt-4 w-100" id="submitBtn">Analyze Image</button>
                     </form>
                     
                     {% if error %}
-                    <div class="alert alert-danger mt-3 small">{{ error }}</div>
+                    <div class="alert alert-danger mt-3">⚠️ {{ error }}</div>
                     {% endif %}
+                    
+                    <!-- Loading Indicator -->
+                    <div class="loading-spinner" id="loadingSpinner">
+                        <div class="spinner-border text-primary mt-3" role="status">
+                            <span class="visually-hidden">Processing...</span>
+                        </div>
+                        <p class="text-muted mt-2 small" id="statusText">Starting analysis...</p>
+                    </div>
+                    
+                    <!-- Progress Bar -->
+                    <div class="progress-container" id="progressContainer">
+                        <div class="progress">
+                            <div class="progress-bar" id="progressBar" role="progressbar" style="width: 0%"></div>
+                        </div>
+                        <p class="text-muted small mt-2 text-center" id="progressText">0%</p>
+                    </div>
                 </div>
             </div>
+            {% endif %}
+
+            {% if results %}
+            <!-- RESULTS SECTION (shown after processing) -->
             
-            {% if metrics %}
-            <div class="card">
-                <div class="card-header bg-white fw-bold py-3">2. Quantitative Metrics</div>
+            <!-- Back to Upload Button -->
+            <div class="text-center mb-4">
+                <a href="/" class="btn btn-secondary">← Upload Another Image</a>
+            </div>
+            
+            <!-- Classification Result -->
+            <div class="card result-card mb-4">
+                <div class="card-header bg-white text-center py-3">
+                    <h3 class="mb-0">🔍 Classification Result</h3>
+                </div>
                 <div class="card-body">
-                    <div class="row g-2">
-                        <div class="col-6">
-                            <div class="metric-box">
-                                <div class="metric-val">{{ metrics['Wound Area'] }}</div>
-                                <div class="metric-lbl">Area</div>
-                            </div>
+                    <div class="row">
+                        <div class="col-md-6 text-center mb-3 mb-md-0">
+                            <h6 class="text-muted">Original Image</h6>
+                            <img src="data:image/png;base64,{{ results.img_data }}" class="img-fluid img-preview border">
                         </div>
-                        <div class="col-6">
-                            <div class="metric-box">
-                                <div class="metric-val">{{ metrics['Max Width'] }}</div>
-                                <div class="metric-lbl">Width</div>
+
+                        <div class="col-md-6">
+                            {% if results.prediction == 'None' %}
+                                <div class="alert alert-success text-center">
+                                    <h4 class="alert-heading fw-bold">✅ No Pathology</h4>
+                                    <p class="mb-0">Confidence: <strong>{{ results.confidence }}%</strong></p>
+                                </div>
+                            {% else %}
+                                <div class="alert alert-danger text-center">
+                                    <h4 class="alert-heading fw-bold">⚠️ {{ results.prediction }}</h4>
+                                    <p class="mb-0">Confidence: <strong>{{ results.confidence }}%</strong></p>
+                                </div>
+                            {% endif %}
+
+                            <hr>
+                            <p class="text-muted small mb-2"><strong>Class Probabilities:</strong></p>
+                            <div class="mb-0">
+                                {% set classes = ['Both', 'Infection', 'Ischaemia', 'None'] %}
+                                {% for cls in classes %}
+                                <div class="mb-2">
+                                    <div class="d-flex justify-content-between small">
+                                        <span>{{ cls }}</span>
+                                        <span>{{ (results.metrics.get(cls, 0)|float * 100)|round(1) }}%</span>
+                                    </div>
+                                    <div class="progress">
+                                        <div class="progress-bar {% if cls == results.prediction %}bg-danger{% else %}bg-secondary opacity-25{% endif %}" 
+                                             role="progressbar" 
+                                             style="width: {{ (results.metrics.get(cls, 0)|float * 100)|round(1) }}%">
+                                        </div>
+                                    </div>
+                                </div>
+                                {% endfor %}
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
-            {% endif %}
-        </div>
 
-        <div class="col-lg-8">
-            {% if prediction %}
-            
-            <div class="card">
-                <div class="card-body d-flex align-items-center justify-content-between">
-                    <div>
-                        <h5 class="text-muted mb-1">Primary Classification</h5>
-                        {% if prediction == 'None' %}
-                            <h2 class="text-success fw-bold mb-0">Healthy / No DFU</h2>
-                        {% else %}
-                            <h2 class="text-danger fw-bold mb-0">{{ prediction }}</h2>
+            <!-- Explainability Section -->
+            <div class="card result-card mb-4">
+                <div class="card-header bg-white text-center py-3">
+                    <h3 class="mb-0">🧠 Model Explainability</h3>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        {% if results.gradcam_data %}
+                        <div class="col-md-6 text-center">
+                            <h6 class="text-muted">GradCAM Heatmap</h6>
+                            <img src="data:image/png;base64,{{ results.gradcam_data }}" class="img-fluid explanation-img border">
+                            <p class="small text-muted mt-2">Shows which regions influenced the classification</p>
+                        </div>
+                        {% endif %}
+                        
+                        {% if results.lime_data %}
+                        <div class="col-md-6 text-center">
+                            <h6 class="text-muted">LIME Explanation</h6>
+                            <img src="data:image/png;base64,{{ results.lime_data }}" class="img-fluid explanation-img border">
+                            <p class="small text-muted mt-2">Highlights important features for prediction</p>
+                        </div>
                         {% endif %}
                     </div>
-                    <div class="text-end">
-                        <div class="display-6 fw-bold text-primary">{{ confidence }}%</div>
-                        <small class="text-muted">Confidence Score</small>
-                    </div>
                 </div>
             </div>
 
-            <div class="card">
-                <div class="card-header bg-white fw-bold py-3">3. Visual Diagnostics (Computer Vision)</div>
-                <div class="card-body">
-                    <div class="row text-center g-3">
-                        <div class="col-md-3 col-6">
-                            <img src="data:image/png;base64,{{ img_data }}" class="img-preview">
-                            <div class="xai-label">Original</div>
-                        </div>
-                        <div class="col-md-3 col-6">
-                            {% if seg_data %}
-                            <img src="data:image/png;base64,{{ seg_data }}" class="img-preview border">
-                            <div class="xai-label text-success">Segmentation Mask</div>
-                            {% else %}<div class="img-preview bg-light pt-5">N/A</div>{% endif %}
-                        </div>
-                        <div class="col-md-3 col-6">
-                            {% if gradcam_data %}
-                            <img src="data:image/png;base64,{{ gradcam_data }}" class="img-preview">
-                            <div class="xai-label text-danger">Grad-CAM (Focus)</div>
-                            {% else %}<div class="img-preview bg-light pt-5">N/A</div>{% endif %}
-                        </div>
-                        <div class="col-md-3 col-6">
-                            {% if lime_data %}
-                            <img src="data:image/png;base64,{{ lime_data }}" class="img-preview">
-                            <div class="xai-label text-warning">LIME (Explanations)</div>
-                            {% else %}<div class="img-preview bg-light pt-5">N/A</div>{% endif %}
-                        </div>
-                    </div>
+            <!-- Segmentation & Metrics -->
+            {% if results.seg_data or results.ai_results %}
+            <div class="card result-card mb-4">
+                <div class="card-header bg-white text-center py-3">
+                    <h3 class="mb-0">📏 Wound Metrics</h3>
                 </div>
-            </div>
+                <div class="card-body">
+                    <div class="row mb-4">
+                        {% if results.seg_data %}
+                        <div class="col-md-6 text-center">
+                            <h6 class="text-muted">Segmentation Mask</h6>
+                            <img src="data:image/png;base64,{{ results.seg_data }}" class="img-fluid explanation-img border">
+                        </div>
+                        {% endif %}
+                        
+                        {% if results.depth_data %}
+                        <div class="col-md-6 text-center">
+                            <h6 class="text-muted">Depth Map (MiDaS)</h6>
+                            <img src="data:image/png;base64,{{ results.depth_data }}" class="img-fluid explanation-img border">
+                            <p class="small text-muted mt-2">Yellow/Red = Closer/Protruding | Blue/Purple = Deeper/Recessed</p>
+                        </div>
+                        {% endif %}
+                    </div>
 
-            <div class="card">
-                <div class="card-header bg-white fw-bold py-3 d-flex justify-content-between">
-                    <span>4. AI Generated Medical Summary (Llama 3)</span>
-                    <span class="badge bg-warning text-dark">Beta</span>
-                </div>
-                <div class="card-body">
-                    <div id="llm-output" class="report-box">
-                        {{ llm_report }}
+                    <div class="row">
+                        <div class="col-md-12">
+                            <h6 class="mb-3"><strong>Quantitative Metrics</strong></h6>
+                            {% if results.ai_results %}
+                            <div class="row">
+                                <div class="col-md-3 text-center mb-3">
+                                    <div class="p-3 bg-light rounded">
+                                        <p class="text-primary h5 mb-1">{{ results.ai_results.get('Classification', 'N/A') }}</p>
+                                        <p class="text-muted small mb-0">CLASSIFICATION</p>
+                                    </div>
+                                </div>
+                                <div class="col-md-3 text-center mb-3">
+                                    <div class="p-3 bg-light rounded">
+                                        <p class="text-primary h5 mb-1">{{ results.ai_results.get('Wound Area', 'N/A') }}</p>
+                                        <p class="text-muted small mb-0">WOUND AREA</p>
+                                    </div>
+                                </div>
+                                <div class="col-md-3 text-center mb-3">
+                                    <div class="p-3 bg-light rounded">
+                                        <p class="text-primary h5 mb-1">{{ results.ai_results.get('Max Width', 'N/A') }}</p>
+                                        <p class="text-muted small mb-0">MAX WIDTH</p>
+                                    </div>
+                                </div>
+                                <div class="col-md-3 text-center mb-3">
+                                    <div class="p-3 bg-light rounded">
+                                        <p class="text-primary h5 mb-1">{{ results.ai_results.get('Confidence', 'N/A') }}</p>
+                                        <p class="text-muted small mb-0">CONFIDENCE</p>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
+                        </div>
                     </div>
-                    <script>
-                        document.getElementById('llm-output').innerHTML = marked.parse(`{{ llm_report }}`);
-                    </script>
-                </div>
-            </div>
-            
-            {% else %}
-            <div class="card h-100 d-flex align-items-center justify-content-center text-center p-5 text-muted">
-                <div>
-                    <h1 style="font-size: 4rem;">🩺</h1>
-                    <h3>Ready for Analysis</h3>
-                    <p>Upload an image and select symptoms to begin.</p>
                 </div>
             </div>
             {% endif %}
+
+            <!-- LLM Report -->
+            {% if results.llm_report %}
+            <div class="card result-card mb-4">
+                <div class="card-header bg-white text-center py-3">
+                    <h3 class="mb-0">📋 AI Medical Report</h3>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-info" role="alert">
+                        <p class="mb-0" style="white-space: pre-wrap;">{{ results.llm_report }}</p>
+                    </div>
+                    <p class="text-muted small mt-3">
+                        <strong>Report Generated:</strong> {{ results.report_date }}
+                    </p>
+                    <p class="text-muted small">
+                        <strong>Disclaimer:</strong> This is an AI-generated analysis for informational purposes only. 
+                        Always consult with a qualified healthcare professional for medical diagnosis and treatment.
+                    </p>
+                </div>
+            </div>
+            {% endif %}
+
+            {% endif %}
+
         </div>
     </div>
 </div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+document.getElementById('analysisForm')?.addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    const loadingSpinner = document.getElementById('loadingSpinner');
+    const progressContainer = document.getElementById('progressContainer');
+    const submitBtn = document.getElementById('submitBtn');
+    
+    loadingSpinner.style.display = 'block';
+    progressContainer.style.display = 'block';
+    submitBtn.disabled = true;
+    
+    const formData = new FormData(this);
+    
+    fetch('/', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.text())
+    .then(html => {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        
+        const taskIdElement = doc.querySelector('#taskIdHolder');
+        const taskId = taskIdElement ? taskIdElement.getAttribute('data-task-id') : null;
+        
+        console.log('✅ Job created:', taskId);
+        
+        if (taskId && taskId.trim() && taskId !== 'None') {
+            pollTaskStatus(taskId);
+        } else {
+            alert('Failed to create job');
+            submitBtn.disabled = false;
+            loadingSpinner.style.display = 'none';
+        }
+    })
+    .catch(err => {
+        console.error('Fetch error:', err);
+        alert('Error submitting form: ' + err.message);
+        submitBtn.disabled = false;
+        loadingSpinner.style.display = 'none';
+    });
+});
+
+function pollTaskStatus(jobId) {
+    console.log('📊 Polling job status:', jobId);
+    let pollCount = 0;
+    const maxPolls = 600; // 10 minutes at 1s intervals
+    
+    const pollInterval = setInterval(() => {
+        pollCount++;
+        
+        fetch(`/job-status/${jobId}`)
+            .then(response => {
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return response.json();
+            })
+            .then(data => {
+                const progressBar = document.getElementById('progressBar');
+                const progressText = document.getElementById('progressText');
+                const statusText = document.getElementById('statusText');
+                
+                progressBar.style.width = data.progress + '%';
+                progressText.textContent = data.progress + '%';
+                statusText.textContent = data.status || 'Processing...';
+                
+                console.log(`[${pollCount}] State: ${data.state} | Progress: ${data.progress}%`);
+                
+                if (data.state === 'completed') {
+                    clearInterval(pollInterval);
+                    console.log('✅ Job completed! Redirecting to results...');
+                    // Redirect to display cached results
+                    window.location.href = data.redirect_url || `/?job_id=${jobId}`;
+                } else if (data.state === 'failed') {
+                    clearInterval(pollInterval);
+                    alert('❌ Analysis failed: ' + (data.error || 'Unknown error'));
+                    location.reload();
+                }
+            })
+            .catch(err => {
+                console.error('Poll error:', err);
+                if (pollCount >= maxPolls) {
+                    clearInterval(pollInterval);
+                    alert('⏱️ Job timed out after 10 minutes');
+                }
+            });
+    }, 1000); // Poll every 1 second
+}
+</script>
 
 </body>
 </html>
