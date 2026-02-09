@@ -103,9 +103,12 @@
             {% if results %}
             <!-- RESULTS SECTION (shown after processing) -->
             
-            <!-- Back to Upload Button -->
+            <!-- Back to Upload Button and PDF Download -->
             <div class="text-center mb-4">
                 <a href="/" class="btn btn-secondary">← Upload Another Image</a>
+                {% if job_id %}
+                <a href="/download-report/{{ job_id }}" class="btn btn-primary ms-2" target="_blank">Download PDF Report</a>
+                {% endif %}
             </div>
             
             <!-- Classification Result -->
@@ -234,6 +237,16 @@
                                     <div class="p-3 bg-light rounded">
                                         <p class="text-primary h5 mb-1">{{ results.ai_results.get('Confidence', 'N/A') }}</p>
                                         <p class="text-muted small mb-0">CONFIDENCE</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- New row containing Depth Index -->
+                            <div class="row mt-2">
+                                <div class="col-md-3 text-center mb-3">
+                                    <div class="p-3 bg-light rounded">
+                                        <p class="text-primary h5 mb-1">{{ results.ai_results.get('Relative Depth Index', 'N/A') }}</p>
+                                        <p class="text-muted small mb-0">DEPTH INDEX</p>
                                     </div>
                                 </div>
                             </div>
