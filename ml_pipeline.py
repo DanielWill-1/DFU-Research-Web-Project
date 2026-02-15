@@ -27,7 +27,8 @@ load_dotenv()
 # ==========================================
 class Config:
     # Paths
-    TF_MODEL_PATH = 'final_model.h5'
+    #TF_MODEL_PATH = 'final_model.h5'
+    TF_MODEL_PATH = 'final_dfu_model_weighted.h5'  # Updated path for the classification model
     TORCH_SEG_PATH = 'new_unet_seg.pth'
     
     # Model settings
@@ -69,11 +70,23 @@ def initialize_models():
     
     # A. TensorFlow Classification Model
     print("⏳ Loading TensorFlow Classifier...")
+    print(f"   Looking for: {cfg.TF_MODEL_PATH}")
+    print(f"   Absolute path: {os.path.abspath(cfg.TF_MODEL_PATH)}")
+    print(f"   File exists: {os.path.isfile(cfg.TF_MODEL_PATH)}\n")
+    
     try:
+        if not os.path.isfile(cfg.TF_MODEL_PATH):
+            raise FileNotFoundError(f"Model file not found at {os.path.abspath(cfg.TF_MODEL_PATH)}")
+        
         _tf_model = tf.keras.models.load_model(cfg.TF_MODEL_PATH, compile=False)
         print("✅ Classification model loaded\n")
-    except FileNotFoundError:
-        print(f"❌ Model not found: {cfg.TF_MODEL_PATH}\n")
+    except FileNotFoundError as e:
+        print(f"❌ Model file missing: {e}\n")
+        print("   Available files in current directory:")
+        for f in os.listdir('.'):
+            if f.endswith('.h5'):
+                print(f"     - {f}")
+        print()
         _tf_model = None
     except Exception as e:
         print(f"❌ Error loading classifier: {e}\n")

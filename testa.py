@@ -122,11 +122,11 @@ def process_image_task(job_id, file_path, symptoms_dict):
         results_cache[job_id] = results
         
         job_manager.mark_completed(job_id, results)
-        print(f"✅ Job {job_id} completed successfully")
+        print(f" Job {job_id} completed successfully")
         
     except Exception as e:
         job_manager.mark_failed(job_id, str(e))
-        print(f"❌ Job {job_id} failed: {e}")
+        print(f" Job {job_id} failed: {e}")
         import traceback
         traceback.print_exc()
 
@@ -149,7 +149,7 @@ def index():
         # Display cached results
         context['results'] = results_cache[job_id]
         context['job_id'] = job_id       # <-- added so template can link to /download-report/<job_id>
-        print(f"📊 Displaying results for job {job_id}")
+        print(f" Displaying results for job {job_id}")
         # Optional: Delete from cache after displaying (uncomment if you want)
         # del results_cache[job_id]
     
@@ -188,11 +188,11 @@ def index():
             thread.start()
             
             context['task_id'] = job_id
-            print(f"✅ Job created: {job_id}")
+            print(f" Job created: {job_id}")
             
         except Exception as e:
             context['error'] = f"Error: {str(e)}"
-            print(f"❌ Error: {e}")
+            print(f" Error: {e}")
     
     return render_template('index.html', **context)
 
@@ -339,11 +339,11 @@ def server_error(e):
 
 if __name__ == '__main__':
     print("\n" + "=" * 60)
-    print("🚀 DFU Classifier Web App Starting")
+    print(" DFU Classifier Web App Starting")
     print("=" * 60)
-    print("✅ Threading-based processing (no RQ/Redis/Celery)")
-    print("📁 Upload folder:", os.path.abspath(app.config['UPLOAD_FOLDER']))
-    print("🌐 Server: http://localhost:5000")
+    print(" Threading-based processing (no RQ/Redis/Celery)")
+    print(" Upload folder:", os.path.abspath(app.config['UPLOAD_FOLDER']))
+    print(" Server: http://localhost:5000")
     print("=" * 60 + "\n")
     
     app.run(debug=False, threaded=True, port=5000)
