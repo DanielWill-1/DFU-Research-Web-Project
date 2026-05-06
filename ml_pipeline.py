@@ -64,12 +64,12 @@ def initialize_models():
     global _tf_model, _seg_model, _midas_model, _midas_transform, _grad_model, _lime_explainer
     
     print("\n" + "=" * 60)
-    print("🔄 INITIALIZING ML MODELS")
+    print(" INITIALIZING ML MODELS")
     print("=" * 60)
-    print(f"🖥️  Device: {cfg.DEVICE}\n")
+    print(f"  Device: {cfg.DEVICE}\n")
     
     # A. TensorFlow Classification Model
-    print("⏳ Loading TensorFlow Classifier...")
+    print(" Loading TensorFlow Classifier...")
     print(f"   Looking for: {cfg.TF_MODEL_PATH}")
     print(f"   Absolute path: {os.path.abspath(cfg.TF_MODEL_PATH)}")
     print(f"   File exists: {os.path.isfile(cfg.TF_MODEL_PATH)}\n")
@@ -79,9 +79,9 @@ def initialize_models():
             raise FileNotFoundError(f"Model file not found at {os.path.abspath(cfg.TF_MODEL_PATH)}")
         
         _tf_model = tf.keras.models.load_model(cfg.TF_MODEL_PATH, compile=False)
-        print("✅ Classification model loaded\n")
+        print(" Classification model loaded\n")
     except FileNotFoundError as e:
-        print(f"❌ Model file missing: {e}\n")
+        print(f" Model file missing: {e}\n")
         print("   Available files in current directory:")
         for f in os.listdir('.'):
             if f.endswith('.h5'):
@@ -89,11 +89,11 @@ def initialize_models():
         print()
         _tf_model = None
     except Exception as e:
-        print(f"❌ Error loading classifier: {e}\n")
+        print(f" Error loading classifier: {e}\n")
         _tf_model = None
     
     # B. PyTorch Segmentation Model
-    print("⏳ Loading PyTorch Segmentation Model...")
+    print(" Loading PyTorch Segmentation Model...")
     try:
         _seg_model = smp.Unet(
             encoder_name="efficientnet-b0",
@@ -106,30 +106,30 @@ def initialize_models():
         if os.path.isfile(cfg.TORCH_SEG_PATH):
             _seg_model.load_state_dict(torch.load(cfg.TORCH_SEG_PATH, map_location=cfg.DEVICE))
             _seg_model.eval()
-            print("✅ Segmentation model loaded\n")
+            print(" Segmentation model loaded\n")
         else:
-            print(f"⚠️  Segmentation weights not found: {cfg.TORCH_SEG_PATH}\n")
+            print(f"  Segmentation weights not found: {cfg.TORCH_SEG_PATH}\n")
             _seg_model = None
     except Exception as e:
-        print(f"❌ Error loading segmentation: {e}\n")
+        print(f" Error loading segmentation: {e}\n")
         _seg_model = None
     
     # C. MiDaS Depth Estimation Model
-    print("⏳ Loading MiDaS Depth Model...")
+    print(" Loading MiDaS Depth Model...")
     try:
         model_type = "MiDaS_small"
         _midas_model = torch.hub.load("intel-isl/MiDaS", model_type).to(cfg.DEVICE)
         _midas_model.eval()
         midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
         _midas_transform = midas_transforms.small_transform
-        print(f"✅ MiDaS depth model loaded ({model_type})\n")
+        print(f" MiDaS depth model loaded ({model_type})\n")
     except Exception as e:
-        print(f"⚠️  MiDaS not available: {e}\n")
+        print(f"  MiDaS not available: {e}\n")
         _midas_model = None
         _midas_transform = None
     
     # D. GradCAM Setup
-    print("⏳ Setting up GradCAM...")
+    print(" Setting up GradCAM...")
     if _tf_model:
         try:
             # Find EfficientNet backbone layer
@@ -155,22 +155,22 @@ def initialize_models():
                         break
             
             if _grad_model:
-                print("✅ GradCAM model ready\n")
+                print(" GradCAM model ready\n")
             else:
-                print("⚠️  Could not setup GradCAM\n")
+                print("  Could not setup GradCAM\n")
         except Exception as e:
-            print(f"⚠️  GradCAM setup failed: {e}\n")
+            print(f"  GradCAM setup failed: {e}\n")
     
     # E. LIME Explainer
     print("⏳ Initializing LIME Explainer...")
     try:
         _lime_explainer = lime_image.LimeImageExplainer()
-        print("✅ LIME explainer ready\n")
+        print(" LIME explainer ready\n")
     except Exception as e:
-        print(f"⚠️  LIME initialization failed: {e}\n")
+        print(f"  LIME initialization failed: {e}\n")
     
     print("=" * 60)
-    print("✅ MODEL INITIALIZATION COMPLETE\n")
+    print(" MODEL INITIALIZATION COMPLETE\n")
 
 # ==========================================
 # IMAGE PREPROCESSING
@@ -266,7 +266,7 @@ def generate_gradcam(img_array, img_np, pred_idx):
         return array_to_base64(overlay)
     
     except Exception as e:
-        print(f"⚠️  GradCAM generation failed: {e}")
+        print(f"  GradCAM generation failed: {e}")
         return None
 
 # ==========================================
@@ -318,7 +318,7 @@ def generate_lime(img_pil, pred_idx):
         return array_to_base64((lime_boundary * 255).astype(np.uint8))
     
     except Exception as e:
-        print(f"⚠️  LIME generation failed: {e}")
+        print(f"  LIME generation failed: {e}")
         return None
 
 # ==========================================
@@ -379,7 +379,7 @@ def segment_wound(img_np):
         return array_to_base64(mask_uint8), metrics
     
     except Exception as e:
-        print(f"⚠️  Segmentation failed: {e}")
+        print(f"  Segmentation failed: {e}")
         return None, {}
 
 # ==========================================
@@ -433,7 +433,7 @@ def estimate_depth(img_np):
         return array_to_base64(depth_colored), depth_score
     
     except Exception as e:
-        print(f"⚠️  Depth estimation failed: {e}")
+        print(f"  Depth estimation failed: {e}")
         return None, 0.0
 
 # ==========================================
